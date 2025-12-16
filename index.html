@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PZEM Energy Monitor Dashboard</title>    <!-- jQuery & jQuery UI (required for sevenSeg) -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://code.jquery.com/ui/1.13.2/jquery-ui.min.js"></script>
+    
+    <!-- sevenSeg.js for 7-segment displays -->
+    <script src="https://brandonlwhite.github.io/sevenSeg.js/sevenSeg.js"></script>
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+
+    <!-- MQTT.js -->
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0
+        }
+
+        body {
+            font-family: Segoe UI, Tahoma, Geneva, Verdana, sans-serif;
+            min-height: 100vh;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #333
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 20px
+        }
+
+        .header {
+            text-align: center;
+            color: #fff;
+            margin-bottom: 20px
+        }
+
+        .header h1 {
+            font-size: 2rem;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, .3)
+        }
+
+        .status {
+            display: inline-block;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: 700;
+            margin-top: 10px
+        }
+
+        .status.connected {
+            background: #4caf50;
+            color: #fff
+        }
+
+        .status.disconnected {
+            background: #f44336;
+            color: #fff
+        }
+
+        .config-panel {
+            background: white;
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 16px;
+            box-shadow: 0 8px 20px rgba(0, 0, 0, .08)
+        }
+
+        .config-row {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            margin-bottom: 10px
+        }
+
+        .config-row label {
+            width: 120px;
+            font-weight: 600
+        }
+
+        .config-row input {
+            flex: 1;
+            padding: 8px;
+            border-radius: 6px;
+            border: 1px solid #ddd
+        }
+
+        .controls {
+            text-align: center;
+            margin-bottom: 18px
+        }
+
+        .btn {
+            background: #667eea;
+            color: #fff;
+            border: none;
+            padding: 10px 18px;
+            border-radius: 22px;
+            cursor: pointer;
+            margin: 0 6px;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, .35)
+        }
+
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed
+        }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 16px;
+            margin-bottom: 18px
+        }
+
+        .gauge-container {
+            background: #fff;
+            border-radius: 12px;
+            padding: 18px;
+            text-align: center;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, .06)
+        }
+
+        .gauge-title {
+            font-weight: 700;
+            margin-bottom: 8px
+        }        .gauge-value {
+            margin-top: 10px;
+            font-weight: 700;
+            color: #333;
+            font-size: 1.1rem;
+        }
+        
+        #voltageDisplay, #currentDisplay, #powerDisplay, #energyDisplay {
+            margin: 15px auto;
+        }
+
+        .chart-container {
+            background: #fff;
+            border-radius: 12px;
+            padding: 18px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, .06)
+        }
+
+        .chart-title {
+            font-weight: 700;
+            margin-bottom: 12px;
+            text-align: center
+        }
+
+        .chart-canvas {
+            height: 360px
+        }
+
+        @media(max-width:600px) {
+            .gauge-canvas {
+                width: 160px !important;
+                height: 160px !important
+            }
+
+            .header h1 {
+                font-size: 1.4rem
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>⚡ PZEM Energy Monitor Dashboard</h1>
+            <div id="connectionStatus" class="status disconnected">Disconnected</div>
+        </div>
+
+        <div class="config-panel">
+            <h3>MQTT Configuration</h3>
+            <div class="config-row">
+                <label for="brokerUrl">Broker URL</label>
+                <input id="brokerUrl" type="text" value="wss://test.mosquitto.org:8081" />
+            </div>
+            <div class="config-row">
+                <label for="topicPrefix">Topic Prefix</label>
+                <input id="topicPrefix" type="text" value="pzem" />
+            </div>
+        </div>
+
+        <div class="controls">
+            <button class="btn" id="connectBtn">Connect</button>
+            <button class="btn" id="disconnectBtn" disabled>Disconnect</button>
+            <button class="btn" id="clearBtn">Clear Chart</button>
+            <button class="btn" id="pauseBtn">Pause Chart</button>
+        </div>        <div class="dashboard">
+            <div class="gauge-container">
+                <div class="gauge-title">Voltage</div>
+                <div id="voltageDisplay"></div>
+                <div class="gauge-value">V</div>
+            </div>
+
+            <div class="gauge-container">
+                <div class="gauge-title">Current</div>
+                <div id="currentDisplay"></div>
+                <div class="gauge-value">A</div>
+            </div>
+
+            <div class="gauge-container">
+                <div class="gauge-title">Power</div>
+                <div id="powerDisplay"></div>
+                <div class="gauge-value">W</div>
+            </div>
+
+            <div class="gauge-container">
+                <div class="gauge-title">Energy</div>
+                <div id="energyDisplay"></div>
+                <div class="gauge-value">Wh</div>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <div class="chart-title">📊 Real-time Electrical Parameters</div>
+            <canvas id="historyChart" class="chart-canvas"></canvas>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let mqttClient = null;
+        let isConnected = false;
+        const chartData = { labels: [], voltage: [], current: [], power: [] };
+        const maxDataPoints = 120;
+        let gauges = {};
+        let historyChart = null;
+        let chartPaused = false; // when true, chart will not accept new points (stays static)        document.addEventListener('DOMContentLoaded', () => {
+        // Initialize 7-segment displays using jQuery
+        $(document).ready(function() {
+            $("#voltageDisplay").sevenSeg({
+                digits: 6,
+                decimalPlaces: 2,
+                value: 0,
+                colorOn: "#4CAF50",
+                colorOff: "#333"
+            });
+
+            $("#currentDisplay").sevenSeg({
+                digits: 6,
+                decimalPlaces: 3,
+                value: 0,
+                colorOn: "#2196F3",
+                colorOff: "#333"
+            });
+
+            $("#powerDisplay").sevenSeg({
+                digits: 6,
+                decimalPlaces: 1,
+                value: 0,
+                colorOn: "#FF9800",
+                colorOff: "#333"
+            });
+
+            $("#energyDisplay").sevenSeg({
+                digits: 6,
+                decimalPlaces: 2,
+                value: 0,
+                colorOn: "#667eea",
+                colorOff: "#333"
+            });
+        });
+
+        initChart();
+
+        document.getElementById('connectBtn').addEventListener('click', connectMQTT);
+        document.getElementById('disconnectBtn').addEventListener('click', disconnectMQTT);
+        document.getElementById('clearBtn').addEventListener('click', clearChartData);
+        document.getElementById('pauseBtn').addEventListener('click', () => {
+            chartPaused = !chartPaused;
+            document.getElementById('pauseBtn').textContent = chartPaused ? 'Resume Chart' : 'Pause Chart';
+        });
+        
+        function updateGauge(name, value, max) {
+            // Update 7-segment display instead of gauge
+            const displayId = name + "Display";
+            const v = (typeof value === 'number' && !isNaN(value)) ? value : 0;
+            try {
+                $("#" + displayId).sevenSeg("option", "value", String(v));
+            } catch(e) {
+                console.warn("Could not update 7-segment display:", displayId, e);
+            }
+        }
+
+        function initChart() {
+            const ctx = document.getElementById('historyChart').getContext('2d');
+            historyChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: chartData.labels, datasets: [
+                        { label: 'Voltage (V)', data: chartData.voltage, borderColor: '#4CAF50', backgroundColor: 'rgba(76,175,80,0.08)', yAxisID: 'y' },
+                        { label: 'Current (A)', data: chartData.current, borderColor: '#2196F3', backgroundColor: 'rgba(33,150,243,0.06)', yAxisID: 'y1' },
+                        { label: 'Power (W)', data: chartData.power, borderColor: '#FF9800', backgroundColor: 'rgba(255,152,0,0.06)', yAxisID: 'y2' },
+                    ]
+                },
+                options: { responsive: true, maintainAspectRatio: true, interaction: { mode: 'index', intersect: false }, scales: { x: { type: 'time', time: { displayFormats: { second: 'HH:mm:ss' } }, title: { display: true, text: 'Time' } }, y: { type: 'linear', display: true, position: 'left', title: { display: true, text: 'Voltage (V)' } }, y1: { type: 'linear', display: true, position: 'right', title: { display: true, text: 'Current (A)' }, grid: { drawOnChartArea: false } }, y2: { display: false }, y3: { display: false } }, plugins: { legend: { position: 'top' } } }
+            });
+        }
+
+        function connectMQTT() {
+            const brokerUrl = document.getElementById('brokerUrl').value.trim();
+            const topicPrefix = document.getElementById('topicPrefix').value.trim() || 'pzem';
+            if (!brokerUrl) return alert('Broker URL required');
+
+            mqttClient = mqtt.connect(brokerUrl);
+
+            mqttClient.on('connect', () => {
+                isConnected = true;
+                updateConnectionStatus(true);
+                document.getElementById('connectBtn').disabled = true;
+                document.getElementById('disconnectBtn').disabled = false;
+
+                mqttClient.subscribe(`${topicPrefix}/all_data`);
+                mqttClient.subscribe(`${topicPrefix}/#`);
+                console.log('Subscribed to', topicPrefix);
+            });
+
+            mqttClient.on('message', (topic, message) => {
+                try {
+                    let payload = null;
+                    try { payload = JSON.parse(message.toString()); } catch (e) { payload = { value: parseFloat(message.toString()) }; }
+                    handleMqttMessage(topic, payload);
+                } catch (e) { console.error('Message handling error', e) }
+            });
+
+            mqttClient.on('error', err => { console.error('MQTT error', err); updateConnectionStatus(false) });
+            mqttClient.on('close', () => { isConnected = false; updateConnectionStatus(false); document.getElementById('connectBtn').disabled = false; document.getElementById('disconnectBtn').disabled = true });
+        }
+
+        function disconnectMQTT() { if (mqttClient) { mqttClient.end(); mqttClient = null; } isConnected = false; updateConnectionStatus(false); document.getElementById('connectBtn').disabled = false; document.getElementById('disconnectBtn').disabled = true }
+
+        function updateConnectionStatus(connected) { const el = document.getElementById('connectionStatus'); if (connected) { el.textContent = 'Connected'; el.className = 'status connected' } else { el.textContent = 'Disconnected'; el.className = 'status disconnected' } }
+
+        function handleMqttMessage(topic, data) {
+            const parts = topic.split('/');
+            const param = parts[parts.length - 1];
+            if (param === 'all_data' || (data && data.voltage !== undefined)) {
+                const obj = (data && data.voltage !== undefined) ? data : (data.value ? { value: data.value } : data);
+                updateAllDisplays(obj);
+                addToChart(obj);
+            } else {
+                // single-parameter topics like pzem/voltage
+                const value = (data && data.value !== undefined) ? data.value : (typeof data === 'number' ? data : parseFloat(data));
+                updateIndividualParameter(param, value);
+            }
+        }        function updateAllDisplays(data) {
+            updateGauge('voltage', Number(data.voltage) || 0, 300);
+            updateGauge('current', Number(data.current) || 0, 30);
+            updateGauge('power', Number(data.power) || 0, 6000);
+            updateGauge('energy', Number(data.energy) || 0, 6000);
+        }        function updateIndividualParameter(param, value) {
+            switch (param) {
+                case 'voltage': updateGauge('voltage', Number(value) || 0, 300); break;
+                case 'current': updateGauge('current', Number(value) || 0, 30); break;
+                case 'power': updateGauge('power', Number(value) || 0, 6000); break;
+                case 'energy': updateGauge('energy', Number(value) || 0, 6000); break;
+            }
+        }
+
+        function addToChart(data) {
+            // if the user paused the chart, keep gauges updated but do not add/scroll the chart
+            if (chartPaused) return;
+            const ts = data.timestamp ? new Date(data.timestamp) : new Date();
+            chartData.labels.push(ts);
+            chartData.voltage.push(Number(data.voltage) || 0);
+            chartData.current.push(Number(data.current) || 0);
+            chartData.power.push(Number(data.power) || 0);
+
+            if (chartData.labels.length > maxDataPoints) { chartData.labels.shift(); chartData.voltage.shift(); chartData.current.shift(); chartData.power.shift(); }
+            if (historyChart) historyChart.update('none');
+        }
+
+        function clearChartData() { chartData.labels = []; chartData.voltage = []; chartData.current = []; chartData.power = []; if (historyChart) historyChart.update(); }
+
+        // optional: auto connect after load (comment out if not desired)
+        // setTimeout(connectMQTT, 1000);
+    </script>
+</body>
+
+</html>
